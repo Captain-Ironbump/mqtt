@@ -265,3 +265,96 @@ int unpack_mqtt_packet(const char *buf, union mqtt_packet *packet)
     }
     return rc;
 }
+
+/*
+ * MQTT packets building functions 
+ */
+
+union mqtt_header *mqtt_packet_header(unsigned char byte)
+{
+    static union mqtt_header header;
+    header.byte = byte;
+    return &header;
+}
+
+struct mqtt_act *mqtt_pack_ack(unsigned char byte, unsigned short pkt_id)
+{
+    static struct mqtt_ack ack;
+    ack.header.byte = byte;
+    ack.pkt_id = pkt_id;
+    return &ack;
+}
+
+struct mqtt_connack *mqtt_packet_connack(unsigned char byte, unsigned char cflags, unsigned char rc)
+{
+    static struct mqtt_connack connack;
+    connack.header.byte = byte;
+    connack.byte = cflags;
+    connack.rc = rc;
+    return &connack;
+}
+
+struct mqtt_suback *mqtt_packet_suback(unsigned char byte,
+                                       unsigned short pkt_id,
+                                       unsigned char *rcs,
+                                       unsigned short rcslen)
+{
+    struct mqtt_suback *suback = malloc(sizeof(*suback));
+    suback->header.byte = byte;
+    suback->pkt_id = pkt_id;
+    suback->rcslen = rcslen;
+    suback->rcs = malloc(rcslen);
+    memcpy(suback->rcs, rcs, rcslen);
+    return suback;
+}
+
+struct mqtt_publish *mqtt_packet_publish(unsigned char byte,
+                                         unsigned short pkt_id,
+                                         size_t topiclen,
+                                         unsigned char *topic,
+                                         size_t payloadlen,
+                                         unsigned char *payload)
+{
+    struct mqtt_publish *publish = malloc(sizeof(*publish));
+    publish->header.byte = byte;
+    publish->pkt_id = pkt_id;
+    publish->topiclen = topiclen;
+    publish->topic = topic;
+    publish->payloadlen = payloadlen;
+    publish->payload = payload;
+    return publish;
+}
+
+void mqtt_packet_release(union mqtt_packet *packet, unsigned type)
+{
+    switch (type)
+    {
+    case CONNECT:
+        free(packet->connect.payload.client_id);
+        if (packet->connect.bits.will == 1)
+        {
+            free(packet->connect.payload.will_topic);
+            free(packet->connect.payload.will_message);
+        }
+        if (packet->connect.bits.username == 1)
+            free(packet->connect.payload.username);
+        if (packet->connect.bits.password == 1)
+            free(packet->connect.payload.password);
+        break;
+    case SUBSCRIBE:
+    case UNSUBSCRIBE:
+        for (unsigned i = 0; i < packet->subscribe.tubles_len; i++)
+            free(packet->subscribe.tuples[i].topic);
+        free(packet->subscribe.tuples);
+        break;
+    case PUBLISH:
+        free(packet->publish.topic);
+        free(packet->publish.payload);
+        break;
+    case SUBACK:
+        free(packet->suback.rcs);
+        break;
+    default:
+        break;
+    }
+}
