@@ -1,7 +1,15 @@
 #include <string.h>
 #include <stdlib.h>
-#include <arpa/inet.h>
 #include "pack.h"
+
+#if defined(__unix__) || defined(__unix) || defined(unix)
+    #include <arpa/inet.h>
+#elif defined(_WIN32) || defined(_WIN64)
+    #include <winsock2.h>
+#elif defined(__APPLE__)
+    #include <arpa/inet.h>
+#endif
+
 
 // Reading data
 uint8_t unpack_u8(const uint8_t **buf)

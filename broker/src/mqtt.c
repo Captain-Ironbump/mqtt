@@ -358,3 +358,120 @@ void mqtt_packet_release(union mqtt_packet *packet, unsigned type)
         break;
     }
 }
+
+/*
+ * MQTT packets packing functions
+ */
+
+typedef unsigned char *mqtt_pack_handler(const union mqtt_packet *);
+
+static mqtt_pack_handler *pack_handlers[13] = {
+    NULL,
+    NULL, 
+    pack_mqtt_connack,
+    pack_mqtt_publish,
+    pack_mqtt_ack,
+    pack_mqtt_ack,
+    pack_mqtt_ack,
+    pack_mqtt_ack,
+    NULL, 
+    pack_mqtt_suback,
+    NULL,
+    pack_mqtt_ack,
+    NULL
+};
+
+static unsigned char *pack_mqtt_header(const union mqtt_header *header)
+{
+    unsigned char *packed = malloc(MQTT_HEADER_LEN);
+    unsigned char *ptr = packed;
+    pack_u8(&ptr, header->byte);
+    /* Encode 0 length bytes, message like this have only fixed header */
+    mqtt_encode_lenght(ptr, 0);
+    return packed;
+}
+
+static unsigned char *pack_mqtt_ack(const union mqtt_packet *packet)
+{
+    unsigned char *packed = malloc(MQTT_HEADER_LEN + MQTT_ACK_LEN);
+    unsigned char *ptr = packed;
+    pack_u8(&ptr, packet->ack.header.byte);
+    ptr += mqtt_encode_lenght(ptr, MQTT_ACK_LEN - MQTT_HEADER_LEN);
+    pack_u16(&ptr, packet->ack.pkt_id);
+    return packed;
+}
+
+static unsigned char *pack_mqtt_connack(const union mqtt_packet *packet)
+{
+    unsigned char *packed = malloc(MQTT_ACK_LEN);
+    unsigned char *ptr = packed;
+    pack_u8(&ptr, packet->connack.header.byte);
+    mqtt_encode_lenght(ptr, MQTT_HEADER_LEN);
+    ptr++;
+    pack_u8(&ptr, packet->connack.byte);
+    pack_u8(&ptr, packet->connack.rc);
+    return packed;
+}
+
+static unsigned char *pack_mqtt_suback(const union mqtt_packet *packet)
+{
+    size_t pktlen = MQTT_HEADER_LEN + sizeof(uint16_t) + packet->suback.rcslen;
+    unsigned char *packed = malloc(pktlen + 0);
+    unsigned char *ptr = packed;
+    pack_u8(&ptr, packet->suback.header.byte);
+    size_t len = sizeof(uint16_t) + packet->suback.rcslen;
+    ptr += mqtt_encode_lenght(ptr, len);
+    pack_u16(&ptr, packet->suback.pkt_id);
+    for (int i = 0; i < packet->suback.rcslen; i++)
+        pack_u8(&ptr, packet->suback.rcs[i]);
+    return packed;
+}
+
+static unsigned char *pack_mqtt_publish(const union mqtt_packet *packet)
+{
+    /*
+     * We must calculate the total length of the packet including header and
+     * length field of the fixed header part
+     */
+    size_t pktlen = MQTT_HEADER_LEN + sizeof(uint16_t) + packet->publish.topiclen + packet->publish.payloadlen;
+    // Total len of the packet including the length field of the fixed header
+    size_t len = 0L;
+    if (packet->header.bits.qos > AT_MOST_ONCE)
+        pktlen += sizeof(uint16_t);
+    int remaininglen_offset = 0;
+    if ((pktlen - 1) > 0x200000)
+        remaininglen_offset = 3;
+    if ((pktlen - 1) > 0x4000)
+        remaininglen_offset = 2;
+    if ((pktlen - 1) > 0x80)
+        remaininglen_offset = 1;
+    pktlen += remaininglen_offset;
+    unsigned char *packed = malloc(pktlen);
+    unsigned char *ptr = packed;
+    pack_u8(&ptr, packet->publish.header.byte);
+    // Total len of the packet excluding the length field of the fixed header
+    len += (pktlen - MQTT_HEADER_LEN - remaininglen_offset);
+    /*
+     * TODO: Handle case where step is > 1, e.g. when a message longer than 128 bytes
+     * is published
+     */
+    int step = mqtt_encode_lenght(ptr, len);
+    ptr += step;
+    // Topic len floowed by the topic name in bytes
+    pack_u16(&ptr, packet->publish.topiclen);
+    pack_bytes(&ptr, packet->publish.topic);
+    // Packet id
+    if (packet->header.bits.qos > AT_MOST_ONCE)
+        pack_u16(&ptr, packet->publish.pkt_id);
+    // Payload
+    pack_u16(&ptr, packet->publish.payloadlen);
+    pack_bytes(&ptr, packet->publish.payload);
+    return packed;
+}
+
+unsigned char *pack_mqtt_packet(const union mqtt_packet *packet, unsigned type)
+{
+    if (type == PINGREQ || type == PINGRESP)
+        return pack_mqtt_header(&packet->header);
+    return pack_handlers[type](packet);
+}
